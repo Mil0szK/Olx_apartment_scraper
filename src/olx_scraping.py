@@ -723,7 +723,6 @@ def make_gui():
                 self.result_text.insert(tk.END, "No offers found.")
 
         def open_link(self, url):
-            # Open the link in a web browser
             webbrowser.open(url)
 
         def get_offer_data(self, hrefs, city, patterns, cursor, progress_bar):
@@ -813,32 +812,28 @@ def make_gui():
                                            price_to,
                                            rooms_url, furniture, area_from, area_to, page_number)
 
-                    # Append new hrefs to the total list
                     hrefs += new_hrefs
                     page_number += 1
 
 
-                    time.sleep(1)  # Avoid being blocked by the server
+                    time.sleep(1)
 
                 except requests.RequestException as e:
                     self.result_text.insert(tk.END, f"Request error: {e}")
-                    progress_popup.destroy()  # Close progress popup on error
+                    progress_popup.destroy()
                     return
 
-            # Set the maximum value for the progress bar based on total hrefs
             if page_limit < 1:
                 hrefs = hrefs[:int(page_limit * len(hrefs))]
             print(len(hrefs))
             progress_bar["maximum"] = len(hrefs)
 
-            # Update the progress bar immediately after scraping the page
             progress_bar.update_idletasks()
 
 
             # Load search patterns
             patterns = load_patterns_from_file("patterns.txt")
 
-            # Connect to database and process offers
             conn = None
             try:
                 conn = sqlite3.connect('olx_offers.db')
@@ -846,7 +841,6 @@ def make_gui():
                 create_database(c)
                 clean_database(c)
 
-                # Pass the progress bar to get_offer_data
                 self.get_offer_data(hrefs, city, patterns, c, progress_bar)
 
                 conn.commit()
@@ -865,7 +859,7 @@ def make_gui():
 
             self.result_text.delete(1.0, tk.END)
             self.result_text.insert(tk.END, "Checking availability of offers, please wait...\n")
-            self.result_text.update_idletasks()  # Ensure the message is displayed immediately
+            self.result_text.update_idletasks()
 
             # Call on_submit() to gather search data
             search_data = self.on_submit_callback()
@@ -910,7 +904,7 @@ def make_gui():
         def check_availability(self):
             self.result_text.delete(1.0, tk.END)
             self.result_text.insert(tk.END, "Checking availability of offers, please wait...\n")
-            self.result_text.update_idletasks()  # Ensure the message is displayed immediately
+            self.result_text.update_idletasks()
 
             try:
                 conn = sqlite3.connect('olx_offers.db')
