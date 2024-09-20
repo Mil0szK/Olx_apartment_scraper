@@ -273,14 +273,21 @@ def get_data(hrefs, city, street_patterns):
 
 def check_offer_availability(url):
     try:
-        response = requests.get(url)
-        return response.status_code == 200
+        page = requests.get(url)
+        tree = html.fromstring(page.content)
+        title = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[2]/h4')
+        if title:
+            return True
+        else:
+            return False
     except requests.RequestException:
         return False
 
 
 def update_offer_availability(c, url, availability):
     c.execute("UPDATE offers SET is_available = ? WHERE url = ?", (availability, url))
+    c.connection.commit()
+    return True
 
 
 def create_database(c):
@@ -311,10 +318,12 @@ def fetch_offers(c):
 def check_data(c):
     c.execute("SELECT url FROM offers WHERE is_available = 1")
     urls = c.fetchall()
+    print(urls)
     try:
         for url in urls:
             is_available = check_offer_availability(url[0])
             if not is_available:
+                print("not")
                 update_offer_availability(c, url[0], 0)
     except Exception as e:
         print(f"Error checking offer availability: {e}")
@@ -690,7 +699,6 @@ def make_gui():
             scrollbar.place(relx=0.97, rely=0, relwidth=0.03, relheight=1)  # Adjust placement of scrollbar
             self.result_text.configure(yscrollcommand=scrollbar.set)
 
-
         def display_offers(self, offers):
             # Clear the Text widget
             self.result_text.delete(1.0, tk.END)
@@ -713,11 +721,12 @@ def make_gui():
                     end_index = f"{start_index}+{len(offer[8])}c"
 
                     # Add a tag to the link
-                    self.result_text.tag_add("link", start_index, end_index)
-                    self.result_text.tag_config("link", foreground="blue", underline=True)
+                    self.result_text.tag_add(f"link{offer[8]}", start_index, end_index)  # Unique tag for each URL
+                    self.result_text.tag_config(f"link{offer[8]}", foreground="blue", underline=True)
 
-                    # Bind the click event to the link
-                    self.result_text.tag_bind("link", "<Button-1>", lambda e, url=offer[8]: self.open_link(url))
+                    # Bind the click event to the link, passing the current URL
+                    self.result_text.tag_bind(f"link{offer[8]}", "<Button-1>",
+                                              lambda e, url=offer[8]: self.open_link(url))
 
             else:
                 self.result_text.insert(tk.END, "No offers found.")
@@ -763,7 +772,8 @@ def make_gui():
             self.result_text.update_idletasks()  # Ensure the message is displayed immediately
 
             page_limit = simpledialog.askfloat("Page Limit",
-                                                 "How many pages would you like to search through? (Min: 0.1 - Max: 5)",
+                                                 "How many pages would you like to search through? (Min: 0.1 - Max: 5)"
+                                                 "One page takes approximately 10 minutes",
                                                  minvalue=0.1, maxvalue=5)
 
             if not page_limit:
@@ -821,6 +831,7 @@ def make_gui():
                 except requests.RequestException as e:
                     self.result_text.insert(tk.END, f"Request error: {e}")
                     progress_popup.destroy()
+                    print("mamy problem")
                     return
 
             if page_limit < 1:
@@ -879,18 +890,16 @@ def make_gui():
 
                 offers = get_offers_from_db(c, city, rooms, price_from, price_to, area_from, area_to, 1)
 
-                if self.circle_center and self.circle_radius:
-                    offers = filter_offers_within_circle(offers, self.circle_center[0], self.circle_center[1],
-                                                         self.circle_radius)
-
                 streets_with_prefixes_and_hrefs = [(offer[6], offer[7], offer[8]) for offer in offers if
-                                                   offer[7] is not None]
+                                                   offer[7] is not None and offer[10] == 1]
 
                 # Mark the filtered streets on the map
                 mark_streets(c, streets_with_prefixes_and_hrefs)
 
+                offers_to_display = [offer for offer in offers if offer[10] == 1]
+
                 conn.close()
-                self.display_offers(offers)
+                self.display_offers(offers_to_display)
             except sqlite3.Error as e:
                 self.result_text.insert(tk.END, f"SQLite error: {e}")
             except Exception as e:
