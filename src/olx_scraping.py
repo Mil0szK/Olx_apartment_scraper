@@ -11,12 +11,12 @@ import re
 import pandas as pd
 import folium
 from folium.plugins import Draw
-from geopy.distance import geodesic
 import time
 from geopy.geocoders import Nominatim
 import webbrowser
 from tkinter import simpledialog
-
+import random
+from requests.exceptions import RequestException
 
 CITIES = ["Kraków", "Warszawa", "Łódź", "Szczecin", "Poznań", "Wrocław", "Gdańsk", "Katowice", "Bydgoszcz", "Toruń", "Białystok", "Rzeszów"]
 
@@ -31,17 +31,23 @@ def scrape_olx(url, city, price_from, price_to, rooms_url, furniture, area_from,
         f'{rooms_url}&search%5Bfilter_enum_furniture%5D%5B0%5D={furniture}'
         f'&search%5Bfilter_float_m%3Afrom%5D={area_from}&search%5Bfilter_float_m%3Ato%5D={area_to}')
     print(created_url)
-    page = requests.get(created_url)
-    soup = BeautifulSoup(page.content, 'lxml')
-    offers = soup.find_all('a', class_='css-z3gu2d')
-    hrefs = []
-    for offer in offers:
-        href = offer.get('href')
-        if 'otodom' not in href:
-            hrefs.append(f"https://www.olx.pl/{href}")
+    time.sleep(random.uniform(1, 3))
+    try:
+        page = requests.get(created_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        page.raise_for_status()
+        soup = BeautifulSoup(page.content, 'lxml')
+        offers = soup.find_all('a', class_='css-z3gu2d')
+        hrefs = []
+        for offer in offers:
+            href = offer.get('href')
+            if 'otodom' not in href:
+                hrefs.append(f"https://www.olx.pl/{href}")
 
-    hrefs = list(set(hrefs))
-    return hrefs
+        hrefs = list(set(hrefs))
+        return hrefs
+    except RequestException as e:
+        print(f"Error scraping page {page_number}: {e}")
+        return []
 
 
 def load_street_names(file_path):
@@ -161,115 +167,109 @@ def mark_streets(c, street_names_with_prefixes_and_hrefs, city='Kraków', countr
     webbrowser.open(map_file)
 
 
-def filter_offers_within_circle(offers, center_lat, center_lon, radius_km):
-    filtered_offers = []
-    for offer in offers:
-        offer_lat, offer_lon = offer[5], offer[6]  # Assuming offer[5] is latitude and offer[6] is longitude
-        if offer_lat is not None and offer_lon is not None:
-            distance = geodesic((center_lat, center_lon), (offer_lat, offer_lon)).kilometers
-            if distance <= radius_km:
-                filtered_offers.append(offer)
-    return filtered_offers
-
 
 def get_data(hrefs, city, street_patterns):
     df = pd.read_csv('cleaned_sample.csv', names=['Street', 'District'])
 
     for i in range(len(hrefs)):
-        page = requests.get(hrefs[i])
-        soup = BeautifulSoup(page.content, 'lxml')
-        tree = html.fromstring(page.content)
+        try:
+            page = requests.get(hrefs[i])
+            soup = BeautifulSoup(page.content, 'lxml')
+            tree = html.fromstring(page.content)
 
-        data = soup.find_all('p', class_='css-b5m1rv')
-        data = [d.get_text() for d in data if d is not None and len(d) > 0]
-
-        price2 = 0
-        area = 0
-        rooms = 0
-        for d in data:
-            if 'Powierzchnia' in d:
-                area = re.search(r'\d+', d)
-                if area:
-                    area = area.group()
-
-            if 'Liczba pokoi' in d:
-                if 'Kawalerka' in d.strip():
-                    rooms = 1
-                else:
-                    rooms = re.search(r'\d+', d)
-                    if rooms:
-                        rooms = rooms.group()
+            data = soup.find_all('p', class_='css-b5m1rv')
+            data = [d.get_text() for d in data if d is not None and len(d) > 0]
 
             price2 = 0
-            if 'Czynsz' in d:
-                price2 = re.search(r'\d+', d)
-                if price2:
-                    price2 = price2.group()
+            area = 0
+            rooms = 0
+            for d in data:
+                if 'Powierzchnia' in d:
+                    area = re.search(r'\d+', d)
+                    if area:
+                        area = area.group()
+
+                if 'Liczba pokoi' in d:
+                    if 'Kawalerka' in d.strip():
+                        rooms = 1
+                    else:
+                        rooms = re.search(r'\d+', d)
+                        if rooms:
+                            rooms = rooms.group()
+
+                price2 = 0
+                if 'Czynsz' in d:
+                    price2 = re.search(r'\d+', d)
+                    if price2:
+                        price2 = price2.group()
+                    else:
+                        price2 = 0
+
+            # price
+            price1 = 0
+            price_data1 = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[3]/div/div/h3')
+            if price_data1:
+                price1_text = price_data1[0].text_content()
+                price1 = re.findall(r'\d+', price1_text)
+                if price1:
+                    price1 = ''.join(price1)
                 else:
-                    price2 = 0
+                    price1 = 0
+            price = int(price1) + int(price2)
 
-        # price
-        price1 = 0
-        price_data1 = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[3]/div/div/h3')
-        if price_data1:
-            price1_text = price_data1[0].text_content()
-            price1 = re.findall(r'\d+', price1_text)
-            if price1:
-                price1 = ''.join(price1)
+            # date
+            date_found = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[1]/span/span')
+            if date_found:
+                date_found = date_found[0].text_content().lower()
+                if 'dzisiaj' in date_found:
+                    date = datetime.now().date()
+                else:
+                    date = datetime.strptime(date_found, '%d %B %Y')
+                date = date.strftime('%Y-%m-%d')
             else:
-                price1 = 0
-        price = int(price1) + int(price2)
+                date = None
 
-        # date
-        date_found = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[1]/span/span')
-        if date_found:
-            date_found = date_found[0].text_content().lower()
-            if 'dzisiaj' in date_found:
-                date = datetime.now().date()
+            # title
+            title_data = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[2]/h4')
+            if title_data:
+                title = title_data[0].text_content()
             else:
-                date = datetime.strptime(date_found, '%d %B %Y')
-            date = date.strftime('%Y-%m-%d')
-        else:
-            date = None
+                title = None
 
-        # title
-        title_data = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[2]/div[1]/div/div[2]/h4')
-        if title_data:
-            title = title_data[0].text_content()
-        else:
-            title = None
-
-        text_of_offer = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[1]/div[2]/div[4]/div')
-        if text_of_offer:
-            text_of_offer = text_of_offer[0].text_content()
-            if title:
-                text_of_offer += title
-        else:
-            text_of_offer = title if title else ""
+            text_of_offer = tree.xpath('/html/body/div[1]/div[2]/div/div[2]/div[3]/div[1]/div[2]/div[4]/div')
+            if text_of_offer:
+                text_of_offer = text_of_offer[0].text_content()
+                if title:
+                    text_of_offer += title
+            else:
+                text_of_offer = title if title else ""
 
 
-        streets_with_prefixes = []
-        for pattern, base in street_patterns.items():
-            match = re.search(pattern, text_of_offer, re.IGNORECASE)
-            if match:
-                base = base.replace("\\", "")
-                prefix = match.group().split()[0]
-                streets_with_prefixes.append((base, prefix))
+            streets_with_prefixes = []
+            for pattern, base in street_patterns.items():
+                match = re.search(pattern, text_of_offer, re.IGNORECASE)
+                if match:
+                    base = base.replace("\\", "")
+                    prefix = match.group().split()[0]
+                    streets_with_prefixes.append((base, prefix))
 
-        if not streets_with_prefixes:
-            streets_with_prefixes.append((None, None))
+            if not streets_with_prefixes:
+                streets_with_prefixes.append((None, None))
 
-        district = None
-        for street, prefix in streets_with_prefixes:
-            if street:
-                district_data = df.loc[
-                    df['Street'].str.lower().str.strip() == street.lower().strip(), 'District'].values
-                if district_data.size > 0:
-                    district = district_data[0]
-                    break
+            district = None
+            for street, prefix in streets_with_prefixes:
+                if street:
+                    district_data = df.loc[
+                        df['Street'].str.lower().str.strip() == street.lower().strip(), 'District'].values
+                    if district_data.size > 0:
+                        district = district_data[0]
+                        break
 
-        is_available = True
-        return title, str(city), int(price), int(area), int(rooms), district, streets_with_prefixes[0][1], streets_with_prefixes[0][0], hrefs[i], date, is_available
+            is_available = True
+            return title, str(city), int(price), int(area), int(rooms), district, streets_with_prefixes[0][1], streets_with_prefixes[0][0], hrefs[i], date, is_available
+        except Exception as e:
+            print(f"Error processing offer: {e}")
+            continue
 
 def check_offer_availability(url):
     try:
@@ -298,6 +298,7 @@ def create_database(c):
 def insert_data(c, title, city, price, area, rooms, district, street_prefix, street, url, date, is_available, latitude=None, longitude=None):
     c.execute("INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               (title, city, price, area, rooms, district, street_prefix, street, url, date, is_available, latitude, longitude))
+    print("dodano")
 
 
 def get_street_coordinates_from_db(c, street_name):
@@ -306,8 +307,16 @@ def get_street_coordinates_from_db(c, street_name):
 
 
 def url_exists(c, url):
-    c.execute("SELECT 1 FROM offers WHERE url = ?", (url,))
-    return c.fetchone() is not None
+    print(f"Checking if URL exists: {url}")
+
+    # Execute query to fetch the full row where the URL matches
+    c.execute("SELECT * FROM offers WHERE url = ?", (url,))
+    result = c.fetchone()
+
+    if result:
+        return True
+    else:
+        return False
 
 
 def fetch_offers(c):
@@ -363,6 +372,7 @@ def load_patterns_from_file(file_path):
 
 
 def clean_database(c):
+    c.execute("UPDATE offers SET city = 'Kraków' WHERE city = 'krakow'")
     c.execute("DELETE FROM offers WHERE area < 1 AND rooms < 1")
 
 
@@ -688,15 +698,15 @@ def make_gui():
 
             # Create a frame to hold the text widget and scrollbar
             text_frame = ttk.Frame(self)
-            text_frame.place(relx=0, rely=0.1, relwidth=1, relheight=0.85)  # Adjust the placement
+            text_frame.place(relx=0, rely=0.1, relwidth=1, relheight=0.85)
 
             # Create a Text widget to display offers
             self.result_text = tk.Text(text_frame, wrap="word", font="Calibri 14", cursor="arrow")
-            self.result_text.place(relx=0, rely=0, relwidth=0.97, relheight=1)  # Adjust the placement
+            self.result_text.place(relx=0, rely=0, relwidth=0.97, relheight=1)
 
             # Create a scrollbar
             scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.result_text.yview)
-            scrollbar.place(relx=0.97, rely=0, relwidth=0.03, relheight=1)  # Adjust placement of scrollbar
+            scrollbar.place(relx=0.97, rely=0, relwidth=0.03, relheight=1)
             self.result_text.configure(yscrollcommand=scrollbar.set)
 
         def display_offers(self, offers):
@@ -721,7 +731,7 @@ def make_gui():
                     end_index = f"{start_index}+{len(offer[8])}c"
 
                     # Add a tag to the link
-                    self.result_text.tag_add(f"link{offer[8]}", start_index, end_index)  # Unique tag for each URL
+                    self.result_text.tag_add(f"link{offer[8]}", start_index, end_index)
                     self.result_text.tag_config(f"link{offer[8]}", foreground="blue", underline=True)
 
                     # Bind the click event to the link, passing the current URL
@@ -736,40 +746,56 @@ def make_gui():
 
         def get_offer_data(self, hrefs, city, patterns, cursor, progress_bar):
             new_offers = []
-            total_offers_scraped = 0  # Track total offers processed
+            total_offers_scraped = 0
+            total_hrefs = len(hrefs)
+
+            # Update progress bar maximum value based on total URLs
+            progress_bar["maximum"] = total_hrefs
+            progress_bar.update_idletasks()
+
+            for key, value in CITY_REPLACEMENTS.items():
+                if city in key:
+                    city = value
+                    break
 
             for href in hrefs:
                 if url_exists(cursor, href):
-                    continue
+                    continue  # Skip URLs that are already in the database
 
                 # Extract data for each offer
                 extracted_data = get_data([href], city, patterns)
 
                 if extracted_data is not None:
-                    if extracted_data[6] and extracted_data[7] is not None:
-                        insert_data(cursor, *extracted_data,
-                                    *get_street_coordinates(cursor, extracted_data[6], extracted_data[7]))
-                    else:
-                        insert_data(cursor, *extracted_data, None, None)
+                    try:
+                        # Insert offer data into the database
+                        if extracted_data[6] and extracted_data[7] is not None:
+                            insert_data(cursor, *extracted_data,
+                                        *get_street_coordinates(cursor, extracted_data[6], extracted_data[7]))
+                        else:
+                            insert_data(cursor, *extracted_data, None, None)
 
-                    # Add the offer to new_offers list
-                    new_offers.append(extracted_data)
+                        # Add the offer to new_offers list
+                        new_offers.append(extracted_data)
+                        print(f"Offer added: {extracted_data}")
 
-                # Update the progress bar for each processed offer
+                    except Exception as e:
+                        print(f"Error inserting data for {href}: {e}")
+                else:
+                    print(f"No data extracted for {href}, skipping.")
+
                 total_offers_scraped += 1
                 progress_bar["value"] = total_offers_scraped
-                progress_bar.update_idletasks()  # Ensure the progress bar updates immediately
+                progress_bar.update_idletasks()
 
-            progress_bar["value"] = len(hrefs)
-            progress_bar.update_idletasks()  # Update the UI one last time
+            progress_bar["value"] = total_hrefs
+            progress_bar.update_idletasks()
 
-            # Once all offers are processed, display them
             self.display_offers(new_offers)
 
         def process_search(self):
             self.result_text.delete(1.0, tk.END)
             self.result_text.insert(tk.END, "Searching for offers, please wait...\n")
-            self.result_text.update_idletasks()  # Ensure the message is displayed immediately
+            self.result_text.update_idletasks()
 
             page_limit = simpledialog.askfloat("Page Limit",
                                                  "How many pages would you like to search through? (Min: 0.1 - Max: 5)"
@@ -791,7 +817,6 @@ def make_gui():
             progress_bar = ttk.Progressbar(progress_popup, orient="horizontal", length=250, mode="determinate")
             progress_bar.pack(pady=10)
 
-            # Call on_submit() to gather search data
             search_data = self.on_submit_callback()
             city, rooms, price_from, price_to, furniture, area_from, area_to = search_data
 
@@ -876,6 +901,8 @@ def make_gui():
             search_data = self.on_submit_callback()
             city, rooms, price_from, price_to, furniture, area_from, area_to = search_data
 
+            print(city)
+
             # Apply CITY_REPLACEMENTS to adjust city name
             for key, value in CITY_REPLACEMENTS.items():
                 if city in key:
@@ -887,8 +914,13 @@ def make_gui():
                 c = conn.cursor()
                 create_database(c)
                 clean_database(c)
+                print(city)
 
                 offers = get_offers_from_db(c, city, rooms, price_from, price_to, area_from, area_to, 1)
+                offers_no = get_offers_from_db(c, city, rooms, price_from, price_to, area_from, area_to, 0)
+                print(offers)
+                print("Nieaktywne")
+                print(offers_no)
 
                 streets_with_prefixes_and_hrefs = [(offer[6], offer[7], offer[8]) for offer in offers if
                                                    offer[7] is not None and offer[10] == 1]
